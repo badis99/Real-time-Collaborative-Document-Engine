@@ -198,25 +198,6 @@ type Operation = InsertOp | DeleteOp;
 ✔ Persisted  
 ✔ Replayable  
 
----
-
-## 🗄️ Database Schema
-
-```sql
-CREATE TABLE documents (
-  id UUID PRIMARY KEY,
-  content TEXT,
-  version INTEGER
-);
-
-CREATE TABLE operations (
-  id SERIAL PRIMARY KEY,
-  doc_id UUID,
-  version INTEGER,
-  op JSONB,
-  UNIQUE (doc_id, version)
-);
-```
 
 ---
 
