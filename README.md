@@ -282,31 +282,4 @@ npm test
 A reconnecting client had a pending operation with a stale position.  
 Fix: transform it against missed ops before resend.
 
----
-
-## 🗺️ Roadmap
-
-- [ ] CRDT alternative (Yjs-style)
-- [ ] Document history playback
-- [ ] Undo/redo via reverse ops
-- [ ] Offline mode
-- [ ] Rate limiting (Redis token bucket)
-
----
-
-## 👤 Author
-
-**Your Name**  
-GitHub: https://github.com/yourusername  
-LinkedIn: https://linkedin.com/in/yourprofile  
-Email: you@email.com
-
----
-
-## 💡 Tips
-
-To make this project stand out even more:
-- Add a demo GIF
-- Deploy a live version
-- Showcase your `transform()` implementation
 
