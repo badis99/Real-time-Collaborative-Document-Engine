@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: password
       POSTGRES_DB: collab_doc
     ports:
-      - "5555:5555"
+      - "5555:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
