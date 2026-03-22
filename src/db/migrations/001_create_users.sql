@@ -1,6 +1,6 @@
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
   id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   name       TEXT        NOT NULL CHECK (char_length(name) BETWEEN 2 AND 50),
   email      TEXT        NOT NULL,
@@ -10,10 +10,10 @@ CREATE TABLE users (
 );
 
 -- Unique index on lowercase email — prevents duplicate accounts
-CREATE UNIQUE INDEX idx_users_email ON users (lower(email));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users (lower(email));
 
 
-CREATE TABLE refresh_tokens (
+CREATE TABLE IF NOT EXISTS refresh_tokens (
   id         SERIAL      PRIMARY KEY,
   user_id    UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   token      TEXT        NOT NULL UNIQUE,
@@ -22,10 +22,10 @@ CREATE TABLE refresh_tokens (
 );
 
 -- Fast lookup by token value — called on every /refresh and /logout
-CREATE INDEX idx_refresh_tokens_token   ON refresh_tokens (token);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token   ON refresh_tokens (token);
 
 -- Fast lookup by user — called when logging out all devices
-CREATE INDEX idx_refresh_tokens_user_id ON refresh_tokens (user_id);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens (user_id);
 
 -- ── Auto-update updated_at ────────────────────────────────────────────────────
 -- Postgres doesn't update timestamps automatically — we use a trigger.
@@ -38,7 +38,15 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER users_set_updated_at
-  BEFORE UPDATE ON users
-  FOR EACH ROW
-  EXECUTE FUNCTION set_updated_at();
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname = 'users_set_updated_at'
+  ) THEN
+    CREATE TRIGGER users_set_updated_at
+      BEFORE UPDATE ON users
+      FOR EACH ROW
+      EXECUTE FUNCTION set_updated_at();
+  END IF;
+END;
+$$;
