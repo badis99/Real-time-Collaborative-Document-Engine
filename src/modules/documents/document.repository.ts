@@ -1,4 +1,5 @@
 import { db } from "../../config/db";
+import type { PoolClient } from "pg";
 
 export type Document = {
   id:         string;
@@ -20,6 +21,8 @@ export type Operation = {
   user_id:    string;
   created_at: Date;
 };
+
+type Queryable = Pick<PoolClient, "query">;
 
 export const documentRepository = {
 
@@ -73,7 +76,7 @@ export const documentRepository = {
 
   async findByIdForUpdate(
     docId: string,
-    trx: typeof db       
+    trx: Queryable
   ): Promise<Document | null> {
     const { rows } = await trx.query<Document>(
       "SELECT * FROM documents WHERE id = $1 FOR UPDATE",
@@ -86,7 +89,7 @@ export const documentRepository = {
     docId:      string,
     content:    string,
     newVersion: number,
-    trx:        typeof db
+    trx:        Queryable
   ): Promise<void> {
     await trx.query(
       `UPDATE documents
@@ -139,7 +142,7 @@ export const documentRepository = {
     version: number,
     op:      Operation["op"],
     userId:  string,
-    trx:     typeof db
+    trx:     Queryable
   ): Promise<void> {
     await trx.query(
       `INSERT INTO operations (doc_id, version, op, user_id)
