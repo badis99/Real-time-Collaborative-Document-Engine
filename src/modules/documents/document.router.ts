@@ -106,6 +106,16 @@ documentRouter.delete("/:id", async (req: Request, res: Response) => {
   return sendResult(res, result);
 });
 
+documentRouter.post("/:id/bump-revision", async (req: Request, res: Response) => {
+  const documentId = normalizeParam(req.params.id);
+  if (!documentId) {
+    return res.status(400).json({ error: "Invalid document id" });
+  }
+
+  const result = await documentService.bumpRevision(documentId, req.user!.id);
+  return sendResult(res, result);
+});
+
 documentRouter.post("/:id/share", async (req: Request, res: Response) => {
   const documentId = normalizeParam(req.params.id);
   if (!documentId) {

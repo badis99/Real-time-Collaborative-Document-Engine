@@ -6,6 +6,7 @@ export type Document = {
   title:      string;
   content:    string;
   version:    number;
+  revision:   number;
   owner_id:   string;
   created_at: Date;
   updated_at: Date;
@@ -28,8 +29,8 @@ export const documentRepository = {
 
   async create(ownerId: string, title: string): Promise<Document> {
     const { rows } = await db.query<Document>(
-      `INSERT INTO documents (title, content, version, owner_id)
-       VALUES ($1, '', 0, $2)
+      `INSERT INTO documents (title, content, version, revision, owner_id)
+       VALUES ($1, '', 0, 0, $2)
        RETURNING *`,
       [title, ownerId]
     );
@@ -46,10 +47,11 @@ export const documentRepository = {
 
   async findByOwner(ownerId: string): Promise<DocumentSummary[]> {
     const { rows } = await db.query<DocumentSummary>(
-      `SELECT id, title, version, owner_id, created_at, updated_at
-       FROM documents
-       WHERE owner_id = $1
-       ORDER BY updated_at DESC`,
+      `SELECT DISTINCT d.id, d.title, d.version, d.revision, d.owner_id, d.created_at, d.updated_at
+       FROM documents d
+       LEFT JOIN document_permissions dp ON d.id = dp.doc_id
+       WHERE d.owner_id = $1 OR dp.user_id = $1
+       ORDER BY d.updated_at DESC`,
       [ownerId]
     );
     return rows;
@@ -72,6 +74,13 @@ export const documentRepository = {
       [docId]
     );
     return (rowCount ?? 0) > 0;
+  },
+
+  async bumpRevision(docId: string): Promise<void> {
+    await db.query(
+      "UPDATE documents SET revision = revision + 1 WHERE id = $1",
+      [docId]
+    );
   },
 
   async findByIdForUpdate(
