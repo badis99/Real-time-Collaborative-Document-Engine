@@ -35,25 +35,9 @@ This guarantee is what makes collaborative editing systems like Google Docs poss
 
 ## 🏗️ Architecture
 
-```
-Clients (A, B, C)
-        │
-        ▼
- ┌──────────────────────────────┐
- │     Socket.IO Server         │
- │  (Node.js + TypeScript)      │
- │                              │
- │  ┌──────────┐ ┌──────────┐   │
- │  │ OT Engine│ │ Presence │   │
- │  └──────────┘ └──────────┘   │
- └──────┬──────────────┬────────┘
-        │              │
-        ▼              ▼
- ┌─────────────┐ ┌─────────────┐
- │ PostgreSQL  │ │   Redis     │
- │ docs + ops  │ │ presence    │
- └─────────────┘ └─────────────┘
-```
+<p align="center">
+  <img src="./assets/architecture.png" alt="LiveDoc Architecture" width="800"/>
+</p>
 
 ---
 
