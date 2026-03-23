@@ -82,6 +82,20 @@ export const documentService = {
     return { ok: true, data: undefined };
   },
 
+  async bumpRevision(
+    docId:       string,
+    requesterId: string
+  ): Promise<ServiceResult<void>> {
+
+    const role = await documentRepository.checkPermission(requesterId, docId);
+    if (!role) {
+      return { ok: false, error: "Document not found or access denied", status: 404 };
+    }
+
+    await documentRepository.bumpRevision(docId);
+    return { ok: true, data: undefined };
+  },
+
   async share(
     docId:       string,
     ownerId:     string,
