@@ -2,17 +2,15 @@ import { Server, Socket } from "socket.io";
 import { documentService }      from "../documents/document.service";
 import { collaborationService } from "./collaboration.service";
 import { presenceService }      from "./presence.service";
-import type { Operation }       from "../ot-engine/types";
+import type { CrdtWireOperation } from "../crdt/types";
 
 type JoinDocPayload = {
-  docId:       string;
-  lastVersion: number;    
+  docId: string;
 };
 
 type OperationPayload = {
-  docId:       string;
-  op:          Operation;
-  baseVersion: number;
+  docId: string;
+  op:    CrdtWireOperation;
 };
 
 type CursorPayload = {
@@ -28,7 +26,7 @@ export function registerCollaborationHandlers(
   const user = socket.data.user; 
 
   socket.on("join-doc", async (
-    { docId, lastVersion }: JoinDocPayload,
+    { docId }: JoinDocPayload,
     ack: Function
   ) => {
     const role = await documentService.checkAccess(user.id, docId);
@@ -39,10 +37,7 @@ export function registerCollaborationHandlers(
 
     socket.join(docId);
 
-    const payload = await collaborationService.getCatchUpPayload(
-      docId,
-      lastVersion
-    );
+    const payload = await collaborationService.getDocumentState(docId);
 
     ack({ ok: true, role, ...payload });
 
@@ -69,15 +64,8 @@ export function registerCollaborationHandlers(
     });
   });
 
-  // ── operation ─────────────────────────────────────────────────────────────
-  // The critical path. Client sends an edit operation — server transforms it,
-  // persists it, acks to sender, and broadcasts to the rest of the room.
-  //
-  // The client MUST wait for the ack before sending the next operation.
-  // This serialises ops from a single client and prevents version conflicts.
-
   socket.on("operation", async (
-    { docId, op, baseVersion }: OperationPayload,
+    { docId, op }: OperationPayload,
     ack: Function
   ) => {
     const role = await documentService.checkAccess(user.id, docId);
@@ -89,7 +77,6 @@ export function registerCollaborationHandlers(
     const result = await collaborationService.applyOperation({
       docId,
       op,
-      baseVersion,
       userId: user.id,
     });
 
@@ -100,7 +87,7 @@ export function registerCollaborationHandlers(
     ack({ ok: true, newVersion: result.newVersion });
 
     socket.to(docId).emit("op-broadcast", {
-      op:      result.transformedOp,
+      op:      result.appliedOp,
       version: result.newVersion,
       userId:  user.id,
     });

@@ -21,6 +21,19 @@ export type DeleteOp = {
     charId: CharId;
 }
 
+export type InsertWireOp = {
+    type: "insert";
+    id: CharId;
+    afterId: CharId | null;
+    char: string;
+};
+
+export type DeleteWireOp = {
+    type: "delete";
+    id: CharId;
+};
+
 export type DocumentState = CharNode[];
 
 export type CrdtOperation = InsertOp | DeleteOp;
+export type CrdtWireOperation = InsertWireOp | DeleteWireOp;
