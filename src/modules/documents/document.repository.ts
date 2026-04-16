@@ -1,5 +1,6 @@
 import { db } from "../../config/db";
 import type { PoolClient } from "pg";
+import type { CrdtWireOperation } from "../crdt/types";
 
 export type Document = {
   id:         string;
@@ -17,7 +18,7 @@ export type Operation = {
   id:         number;
   doc_id:     string;
   version:    number;
-  op:         { type: "insert" | "delete"; position: number; text?: string; length?: number };
+  op:         CrdtWireOperation;
   user_id:    string;
   created_at: Date;
 };
@@ -140,7 +141,7 @@ export const documentRepository = {
   async insertOperation(
     docId:   string,
     version: number,
-    op:      Operation["op"],
+    op:      CrdtWireOperation,
     userId:  string,
     trx:     Queryable
   ): Promise<void> {
@@ -149,6 +150,16 @@ export const documentRepository = {
        VALUES ($1, $2, $3, $4)`,
       [docId, version, JSON.stringify(op), userId]
     );
+  },
+
+  async getOperationsForDocument(docId: string): Promise<Operation[]> {
+    const { rows } = await db.query<Operation>(
+      `SELECT * FROM operations
+       WHERE doc_id = $1
+       ORDER BY version ASC`,
+      [docId]
+    );
+    return rows;
   },
 
   async getOperationsSince(

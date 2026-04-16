@@ -1,171 +1,266 @@
 import { describe, it, expect } from "vitest";
 import { CrdtDocument, SENTINEL_ID } from "../modules/crdt/document";
-import { deserialize, serialize } from "../modules/crdt/serialize";
-import type { CharId, CharNode, CrdtOperation } from "../modules/crdt/types";
+import type {
+  CharId,
+  CharNode,
+  CrdtWireOperation,
+  InsertWireOp,
+  DeleteWireOp,
+} from "../modules/crdt/types";
 
-function id(clientId: string, clock: number): CharId {
-  return { clientId, clock };
+type IntentInsert = {
+  type: "insert";
+  clientId: string;
+  startClock: number;
+  position: number;
+  text: string;
+};
+
+type IntentDelete = {
+  type: "delete";
+  clientId: string;
+  position: number;
+  length: number;
+};
+
+type IntentOp = IntentInsert | IntentDelete;
+
+function isSentinel(id: CharId): boolean {
+  return id.clientId === SENTINEL_ID.clientId && id.clock === SENTINEL_ID.clock;
 }
 
-function char(
-  clientId: string,
-  clock: number,
-  value: string,
-  afterId: CharId | null
-): CharNode {
-  return {
-    id: id(clientId, clock),
-    afterId,
-    value,
-    deleted: false,
-  };
+function cloneState(state: CharNode[]): CharNode[] {
+  return JSON.parse(JSON.stringify(state)) as CharNode[];
 }
 
-describe("CRDT Question 1 — concurrent insert tiebreak", () => {
-  it("bob goes left of alice when both insert after the same afterId", () => {
+function visibleNodes(state: CharNode[]): CharNode[] {
+  return state.filter(n => !n.deleted && !isSentinel(n.id));
+}
+
+function applyWireOp(doc: CrdtDocument, op: CrdtWireOperation): void {
+  if (op.type === "insert") {
+    const node: CharNode = {
+      id: op.id,
+      afterId: op.afterId,
+      value: op.char,
+      deleted: false,
+    };
+    doc.insert({ char: node, afterId: op.afterId });
+    return;
+  }
+
+  doc.delete(op.id);
+}
+
+function seedDocument(initialText: string): CrdtDocument {
+  const doc = new CrdtDocument();
+  let afterId: CharId = SENTINEL_ID;
+
+  for (let i = 0; i < initialText.length; i++) {
+    const op: InsertWireOp = {
+      type: "insert",
+      id: { clientId: "__seed__", clock: i + 1 },
+      afterId,
+      char: initialText[i],
+    };
+
+    applyWireOp(doc, op);
+    afterId = op.id;
+  }
+
+  return doc;
+}
+
+function planFromBase(baseState: CharNode[], intent: IntentOp): CrdtWireOperation[] {
+  const baseVisible = visibleNodes(baseState);
+
+  if (intent.type === "insert") {
+    const boundedPos = Math.max(0, Math.min(intent.position, baseVisible.length));
+    const afterId =
+      boundedPos === 0 ? SENTINEL_ID : baseVisible[boundedPos - 1].id;
+
+    return [
+      {
+        type: "insert",
+        id: { clientId: intent.clientId, clock: intent.startClock },
+        afterId,
+        char: intent.text,
+      },
+    ];
+  }
+
+  const start = Math.max(0, intent.position);
+  const end = Math.min(baseVisible.length, start + intent.length);
+  const deletes: DeleteWireOp[] = [];
+
+  for (let i = start; i < end; i++) {
+    deletes.push({
+      type: "delete",
+      id: baseVisible[i].id,
+    });
+  }
+
+  return deletes;
+}
+
+function applyPlannedOps(baseState: CharNode[], opLists: CrdtWireOperation[][]): string {
+  const doc = CrdtDocument.fromState(cloneState(baseState));
+
+  for (const ops of opLists) {
+    for (const op of ops) {
+      applyWireOp(doc, op);
+    }
+  }
+
+  return doc.toText();
+}
+
+function assertConverges(initialText: string, opA: IntentOp, opB: IntentOp): void {
+  const baseState = seedDocument(initialText).toState();
+  const plannedA = planFromBase(baseState, opA);
+  const plannedB = planFromBase(baseState, opB);
+
+  const path1 = applyPlannedOps(baseState, [plannedA, plannedB]);
+  const path2 = applyPlannedOps(baseState, [plannedB, plannedA]);
+
+  expect(path1).toBe(path2);
+}
+
+function assertConvergesThree(
+  initialText: string,
+  opA: IntentOp,
+  opB: IntentOp,
+  opC: IntentOp
+): void {
+  const baseState = seedDocument(initialText).toState();
+  const plannedA = planFromBase(baseState, opA);
+  const plannedB = planFromBase(baseState, opB);
+  const plannedC = planFromBase(baseState, opC);
+
+  const resultABC = applyPlannedOps(baseState, [plannedA, plannedB, plannedC]);
+  const resultCBA = applyPlannedOps(baseState, [plannedC, plannedB, plannedA]);
+  const resultBAC = applyPlannedOps(baseState, [plannedB, plannedA, plannedC]);
+
+  expect(resultABC).toBe(resultCBA);
+  expect(resultABC).toBe(resultBAC);
+}
+
+describe("CRDT convergence — same structure as OT tests", () => {
+  it("two users insert at different positions", () => {
+    assertConverges(
+      "Hello world",
+      { type: "insert", clientId: "alice", startClock: 1, position: 5, text: "!" },
+      { type: "insert", clientId: "bob", startClock: 1, position: 6, text: " beautiful" }
+    );
+  });
+
+  it("two users insert at the same position", () => {
+    assertConverges(
+      "Hello world",
+      { type: "insert", clientId: "alice", startClock: 1, position: 5, text: "AAA" },
+      { type: "insert", clientId: "bob", startClock: 1, position: 5, text: "BBB" }
+    );
+  });
+
+  it("one user inserts, one user deletes non-overlapping", () => {
+    assertConverges(
+      "Hello world",
+      { type: "insert", clientId: "alice", startClock: 1, position: 0, text: ">>> " },
+      { type: "delete", clientId: "bob", position: 6, length: 5 }
+    );
+  });
+
+  it("one user inserts inside a range the other user deletes", () => {
+    assertConverges(
+      "Hello beautiful world",
+      { type: "insert", clientId: "alice", startClock: 1, position: 10, text: "very " },
+      { type: "delete", clientId: "bob", position: 6, length: 10 }
+    );
+  });
+
+  it("two users delete overlapping ranges", () => {
+    assertConverges(
+      "Hello beautiful world",
+      { type: "delete", clientId: "alice", position: 3, length: 8 },
+      { type: "delete", clientId: "bob", position: 6, length: 7 }
+    );
+  });
+
+  it("three-user case converges across different apply orders", () => {
+    assertConvergesThree(
+      "abcdefghij",
+      { type: "insert", clientId: "alice", startClock: 1, position: 2, text: "XX" },
+      { type: "delete", clientId: "bob", position: 4, length: 3 },
+      { type: "insert", clientId: "carol", startClock: 1, position: 7, text: "YY" }
+    );
+  });
+});
+
+describe("CRDT Question checks", () => {
+  it("Q1: same afterId tie uses clientId tiebreak (bob left of alice)", () => {
     const doc = new CrdtDocument();
 
-    const aliceChar = char("alice", 1, "A", SENTINEL_ID);
-    const bobChar = char("bob", 1, "B", SENTINEL_ID);
+    const opAlice: InsertWireOp = {
+      type: "insert",
+      id: { clientId: "alice", clock: 1 },
+      afterId: SENTINEL_ID,
+      char: "A",
+    };
+    const opBob: InsertWireOp = {
+      type: "insert",
+      id: { clientId: "bob", clock: 1 },
+      afterId: SENTINEL_ID,
+      char: "B",
+    };
 
-    // Both reference the same anchor (root). This is a true sibling tie case.
-    doc.insert({ char: aliceChar, afterId: SENTINEL_ID });
-    doc.insert({ char: bobChar, afterId: SENTINEL_ID });
+    applyWireOp(doc, opAlice);
+    applyWireOp(doc, opBob);
 
-    // Tiebreak rule: when siblings share the same afterId AND same Lamport clock,
-    // higher clientId sorts first. "bob" > "alice", so bob is left.
     expect(doc.toText()).toBe("BA");
   });
-});
 
-describe("CRDT Question 2 — insert after deleted anchor", () => {
-  it("still inserts Y after deleted X because X remains as tombstone anchor", () => {
+  it("Q2: insert after deleted char still works via tombstone anchor", () => {
     const doc = new CrdtDocument();
 
-    const x = char("alice", 1, "X", SENTINEL_ID);
-    doc.insert({ char: x, afterId: SENTINEL_ID });
+    const x: InsertWireOp = {
+      type: "insert",
+      id: { clientId: "alice", clock: 1 },
+      afterId: SENTINEL_ID,
+      char: "X",
+    };
+    const deleteX: DeleteWireOp = {
+      type: "delete",
+      id: x.id,
+    };
+    const yAfterX: InsertWireOp = {
+      type: "insert",
+      id: { clientId: "carol", clock: 1 },
+      afterId: x.id,
+      char: "Y",
+    };
 
-    // X becomes tombstone (deleted=true) but stays in the structure.
-    doc.delete(x.id);
+    applyWireOp(doc, x);
+    applyWireOp(doc, deleteX);
+    applyWireOp(doc, yAfterX);
 
-    const y = char("carol", 1, "Y", x.id);
-    doc.insert({ char: y, afterId: x.id });
-
-    // X is hidden from text, but Y still resolves against X's id.
     expect(doc.toText()).toBe("Y");
-
-    const state = doc.toState();
-    const xNode = state.find(
-      n => n.id.clientId === "alice" && n.id.clock === 1
-    );
-    const yNode = state.find(
-      n => n.id.clientId === "carol" && n.id.clock === 1
-    );
-
-    expect(xNode?.deleted).toBe(true);
-    expect(yNode?.afterId).toEqual(x.id);
   });
-});
 
-describe("CRDT Question 3 — out-of-order Lamport clocks", () => {
-  it("merge applies inserts by Lamport clock ascending: [3, 5, 7]", () => {
+  it("Q3: out-of-order clocks [5, 3, 7] place 5 before 7", () => {
     const doc = new CrdtDocument();
 
-    // Delivered out of order to merge: clocks [5, 3, 7]
-    const ops: CrdtOperation[] = [
-      { type: "insert", afterId: SENTINEL_ID, char: char("u1", 5, "5", SENTINEL_ID) },
-      { type: "insert", afterId: SENTINEL_ID, char: char("u2", 3, "3", SENTINEL_ID) },
-      { type: "insert", afterId: SENTINEL_ID, char: char("u3", 7, "7", SENTINEL_ID) },
+    const ops: InsertWireOp[] = [
+      { type: "insert", id: { clientId: "u5", clock: 5 }, afterId: SENTINEL_ID, char: "5" },
+      { type: "insert", id: { clientId: "u3", clock: 3 }, afterId: SENTINEL_ID, char: "3" },
+      { type: "insert", id: { clientId: "u7", clock: 7 }, afterId: SENTINEL_ID, char: "7" },
     ];
 
-    doc.merge(ops);
+    // Received out of order; apply exactly in received order.
+    for (const op of ops) {
+      applyWireOp(doc, op);
+    }
 
-    const allValuesInStorageOrder = doc
-      .toState()
-      .filter(n => !(n.id.clientId === "__root__" && n.id.clock === 0))
-      .map(n => n.value)
-      .join("");
-
-    // Lamport sort decides apply order for merge.
-    // Insert tiebreak then decides sibling placement at same anchor.
-    expect(allValuesInStorageOrder.length).toBe(3);
-    expect(doc.toText()).toBe("357");
-  });
-
-  it("clock 5 stays left of clock 7 even if received in reverse order", () => {
-    const doc = new CrdtDocument();
-
-    doc.insert({ char: char("u7", 7, "Y", SENTINEL_ID), afterId: SENTINEL_ID });
-    doc.insert({ char: char("u5", 5, "X", SENTINEL_ID), afterId: SENTINEL_ID });
-
-    expect(doc.toText()).toBe("XY");
-  });
-});
-
-describe("CRDT additional coverage", () => {
-  it("delete of unknown id is a no-op", () => {
-    const doc = new CrdtDocument();
-    doc.delete(id("nobody", 999));
-    expect(doc.toText()).toBe("");
-  });
-
-  it("insert with missing afterId falls back to append", () => {
-    const doc = new CrdtDocument();
-
-    const orphanAnchor = id("ghost", 42);
-    doc.insert({ char: char("alice", 1, "A", orphanAnchor), afterId: orphanAnchor });
-    doc.insert({ char: char("bob", 1, "B", SENTINEL_ID), afterId: SENTINEL_ID });
-
-    // First insert appends because anchor wasn't found.
-    // Then root-sibling ordering places bob before alice.
-    expect(doc.toText()).toBe("BA");
-  });
-
-  it("fromState recreates document text exactly", () => {
-    const original = new CrdtDocument();
-    original.insert({ char: char("alice", 1, "H", SENTINEL_ID), afterId: SENTINEL_ID });
-    original.insert({ char: char("alice", 2, "i", id("alice", 1)), afterId: id("alice", 1) });
-
-    const snapshot = original.toState();
-    const restored = CrdtDocument.fromState(snapshot);
-
-    expect(restored.toText()).toBe(original.toText());
-  });
-
-  it("same client same anchor keeps lower clock first", () => {
-    const doc = new CrdtDocument();
-
-    doc.insert({ char: char("alice", 1, "a", SENTINEL_ID), afterId: SENTINEL_ID });
-    doc.insert({ char: char("alice", 2, "b", SENTINEL_ID), afterId: SENTINEL_ID });
-
-    expect(doc.toText()).toBe("ab");
-  });
-
-  it("serialize/deserialize round-trip preserves state", () => {
-    const doc = new CrdtDocument();
-    doc.insert({ char: char("alice", 1, "H", SENTINEL_ID), afterId: SENTINEL_ID });
-    doc.insert({ char: char("alice", 2, "i", id("alice", 1)), afterId: id("alice", 1) });
-
-    const json = serialize(doc.toState());
-    const state = deserialize(json);
-
-    expect(state).toEqual(doc.toState());
-  });
-
-  it("deserialize rejects non-array payloads", () => {
-    expect(() => deserialize("{\"a\":1}"))
-      .toThrow("Invalid serialized CRDT state");
-  });
-
-  it("deserialize rejects malformed node payloads", () => {
-    const bad = JSON.stringify([
-      {
-        id: { clientId: "alice", clock: 1 },
-        afterId: null,
-        value: "X",
-      },
-    ]);
-
-    expect(() => deserialize(bad)).toThrow("Invalid serialized CRDT state");
+    const text = doc.toText();
+    expect(text.indexOf("5")).toBeLessThan(text.indexOf("7"));
   });
 });

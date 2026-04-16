@@ -1,42 +1,39 @@
-import { db } from "../../config/db";
 import { documentRepository } from "../documents/document.repository";
-import { transform } from "../ot-engine/transform";
-import { applyOp }   from "../ot-engine/apply";
-import type { Operation } from "../ot-engine/types";
+import { db } from "../../config/db";
+import { CrdtDocument } from "../crdt/document";
+import type { CharNode, CrdtWireOperation } from "../crdt/types";
 
 export type ApplyResult =
-  | { ok: true;  transformedOp: Operation; newVersion: number }
+  | { ok: true; appliedOp: CrdtWireOperation; newVersion: number }
   | { ok: false; error: string };
 
-export const collaborationService = {
+function applyWireOperation(doc: CrdtDocument, op: CrdtWireOperation): void {
+  if (op.type === "insert") {
+    const node: CharNode = {
+      id: op.id,
+      afterId: op.afterId,
+      value: op.char,
+      deleted: false,
+    };
 
-  // ── applyOperation ────────────────────────────────────────────────────────
-  // This is the heart of the entire project.
-  //
-  // Flow:
-  //   1. Open a transaction and lock the document row (FOR UPDATE)
-  //   2. Fetch all ops that arrived since the client's baseVersion
-  //   3. Transform the incoming op against each missed op (OT algorithm)
-  //   4. Apply the transformed op to the document content
-  //   5. Persist the new op and updated document atomically
-  //   6. Return the transformed op + new version to the handler
-  //
-  // The FOR UPDATE lock in step 1 means only one operation can go through
-  // this function at a time per document. Concurrent ops queue up and each
-  // one sees the fully-committed state from the one before it.
+    doc.insert({ char: node, afterId: op.afterId });
+    return;
+  }
+
+  doc.delete(op.id);
+}
+
+export const collaborationService = {
 
   async applyOperation({
     docId,
     op,
-    baseVersion,
     userId,
   }: {
-    docId:       string;
-    op:          Operation;
-    baseVersion: number;
-    userId:      string;
+    docId:  string;
+    op:     CrdtWireOperation;
+    userId: string;
   }): Promise<ApplyResult> {
-
     const client = await db.connect();
 
     try {
@@ -49,40 +46,22 @@ export const collaborationService = {
         return { ok: false, error: "Document not found" };
       }
 
-      // ── Step 2: Fetch missed operations ───────────────────────────────────
-      // These are ops that were committed between when the client last synced
-      // (baseVersion) and now (doc.version). We need to transform against them.
-      const missedOps = await documentRepository.getOperationsSince(
-        docId,
-        baseVersion
-      );
+      const existingOps = await documentRepository.getOperationsForDocument(docId);
+      const crdt = new CrdtDocument();
 
-      // ── Step 3: Transform the incoming op ─────────────────────────────────
-      // Apply OT: for each missed op, adjust the incoming op's position
-      // so it applies correctly on top of the current document state.
-      //
-      // Example:
-      //   baseVersion = 5, doc.version = 7
-      //   missedOps = [op@v6, op@v7]
-      //   incoming op = insert(10, "hello")
-      //
-      //   transform(insert(10), op@v6) → insert(8)    [v6 deleted 2 chars before pos 10]
-      //   transform(insert(8),  op@v7) → insert(8)    [v7 inserted after pos 8, no shift]
-      //   final transformedOp = insert(8, "hello")    ← safe to apply at v7
-
-      let transformedOp = op;
-
-      for (const missed of missedOps) {
-        transformedOp = transform(transformedOp, missed.op as Operation);
+      for (const existing of existingOps) {
+        applyWireOperation(crdt, existing.op);
       }
 
-      const newContent = applyOp(doc.content, transformedOp);
+      applyWireOperation(crdt, op);
+
+      const newContent = crdt.toText();
       const newVersion = doc.version + 1;
 
       await documentRepository.insertOperation(
         docId,
         newVersion,
-        transformedOp,
+        op,
         userId,
         client
       );
@@ -96,7 +75,7 @@ export const collaborationService = {
 
       await client.query("COMMIT");
 
-      return { ok: true, transformedOp, newVersion };
+      return { ok: true, appliedOp: op, newVersion };
 
     } catch (err) {
       await client.query("ROLLBACK");
@@ -108,45 +87,24 @@ export const collaborationService = {
     }
   },
 
-  // ── getCatchUpPayload ─────────────────────────────────────────────────────
-  // Called when a client reconnects with a stale version.
-  // Returns the ops they missed so they can replay them locally
-  // rather than receiving the full document again.
-
-  async getCatchUpPayload(
-    docId:        string,
-    sinceVersion: number
+  async getDocumentState(
+    docId: string
   ): Promise<{
-    type:      "catch-up" | "full-state";
-    content?:  string;
-    missedOps?: { op: Operation; version: number; userId: string }[];
-    version:   number;
+    state: CharNode[];
+    version: number;
   }> {
     const doc = await documentRepository.findById(docId);
     if (!doc) throw new Error("Document not found");
 
-    const gap = doc.version - sinceVersion;
+    const operations = await documentRepository.getOperationsForDocument(docId);
+    const crdt = new CrdtDocument();
 
-    if (sinceVersion === 0 || gap > 100) {
-      return {
-        type:    "full-state",
-        content: doc.content,
-        version: doc.version,
-      };
+    for (const operation of operations) {
+      applyWireOperation(crdt, operation.op);
     }
 
-    const missedOps = await documentRepository.getOperationsSince(
-      docId,
-      sinceVersion
-    );
-
     return {
-      type:      "catch-up",
-      missedOps: missedOps.map(o => ({
-        op:      o.op as Operation,
-        version: o.version,
-        userId:  o.user_id,
-      })),
+      state: crdt.toState(),
       version: doc.version,
     };
   },
