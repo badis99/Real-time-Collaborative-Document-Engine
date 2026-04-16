@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { CrdtDocument, SENTINEL_ID } from "../modules/crdt/document";
+import { deserialize, serialize } from "../modules/crdt/serialize";
 import type { CharId, CharNode, CrdtOperation } from "../modules/crdt/types";
 
 function id(clientId: string, clock: number): CharId {
@@ -138,5 +139,33 @@ describe("CRDT additional coverage", () => {
     doc.insert({ char: char("alice", 2, "b", SENTINEL_ID), afterId: SENTINEL_ID });
 
     expect(doc.toText()).toBe("ab");
+  });
+
+  it("serialize/deserialize round-trip preserves state", () => {
+    const doc = new CrdtDocument();
+    doc.insert({ char: char("alice", 1, "H", SENTINEL_ID), afterId: SENTINEL_ID });
+    doc.insert({ char: char("alice", 2, "i", id("alice", 1)), afterId: id("alice", 1) });
+
+    const json = serialize(doc.toState());
+    const state = deserialize(json);
+
+    expect(state).toEqual(doc.toState());
+  });
+
+  it("deserialize rejects non-array payloads", () => {
+    expect(() => deserialize("{\"a\":1}"))
+      .toThrow("Invalid serialized CRDT state");
+  });
+
+  it("deserialize rejects malformed node payloads", () => {
+    const bad = JSON.stringify([
+      {
+        id: { clientId: "alice", clock: 1 },
+        afterId: null,
+        value: "X",
+      },
+    ]);
+
+    expect(() => deserialize(bad)).toThrow("Invalid serialized CRDT state");
   });
 });
