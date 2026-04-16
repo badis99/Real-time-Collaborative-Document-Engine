@@ -1,27 +1,26 @@
-import { Clock } from "./clock";
-
 export type CharId = {
     clientId: string;
-    clock: Clock;
+    clock: number;
 }
 
 export type CharNode = {
     id: CharId;
+    afterId: CharId | null,
     value: string;
     deleted: boolean;
 }
 
 export type InsertOp = {
+    type: "insert",
     char: CharNode;
-    positionId: CharId | null;
+    afterId: CharId | null;
 }
 
 export type DeleteOp = {
+    type: "delete",
     charId: CharId;
 }
 
-export type DocumentState = {
-    chars: CharNode[];
-}
+export type DocumentState = CharNode[];
 
 export type CrdtOperation = InsertOp | DeleteOp;
